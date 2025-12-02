@@ -56,7 +56,7 @@ function resolveScalar(v: any): string {
 
 let partId = 0;
 
-export function html(strings: TemplateStringsArray, ...values: any[]): VNode {
+export function html(strings: TemplateStringsArray, ...values: any[]): () => VNode {
     const setups: DomSetup[] = [];
     let out = '';
 
@@ -175,11 +175,11 @@ export function html(strings: TemplateStringsArray, ...values: any[]): VNode {
         });
     }
 
-    return {
+    return () => ({
         __isVNode: true as const,
         html: out,
         setups,
-    };
+    });
 }
 
 // ---------- mount : CSR classique (pas SSR) ----------

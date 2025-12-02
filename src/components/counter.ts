@@ -11,7 +11,7 @@ export const Counter = defineComponent<{ label: string }>(({ label }) => {
         count.set(c => c - 1);
     };
 
-    return () => html`<div class="card">
+    return html`<div class="card">
         <button type="button" onclick="${handleClick}" oncontextmenu="${handleRightClick}">
             ${label}: ${count} (x2: ${double})
         </button>

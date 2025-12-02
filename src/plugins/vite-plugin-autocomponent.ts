@@ -20,7 +20,7 @@ export const autoComponentsPlugin = (
     enforce: 'pre',
 
     transform(code, id) {
-        // Ne traiter que les fichiers au format ".new.ts"
+        // Ne traiter que les fichiers au format ".ts"
         if (!id.endsWith('.ts')) return null;
         // on évite de transformer le fichier des composants lui-même
         if (id.includes('components.ts')) return null;
@@ -29,12 +29,12 @@ export const autoComponentsPlugin = (
             sourceType: 'module',
             plugins: ['typescript'],
         });
-        console.log(id, ast)
+        // console.log(id, ast)
 
         let changed = false;
         let hasDefineImport = false;
         // Module cible pour importer defineComponent. On part des options,
-        // mais si on voit un import de { html } on réutilise son module.
+        // mais si on voit un import de {html} on réutilise son module.
         let targetComponentsModule = options.componentsModule ?? './components';
 
         // 1. vérifier s'il y a déjà un import defineComponent
@@ -61,9 +61,8 @@ export const autoComponentsPlugin = (
         });
 
         traverse(ast, {
-            // Deux formes supportées:
+            // Forme supportée unique:
             // A) export function Foo(...) { return html`...`; }
-            // B) export function Foo(...) { return () => html`...`; }
             ExportNamedDeclaration(path: any) {
                 const decl = path.node.declaration;
                 if (!decl || !t.isFunctionDeclaration(decl) || !decl.id) return;
@@ -86,37 +85,8 @@ export const autoComponentsPlugin = (
                     return direct;
                 };
 
-                const fnReturnsViewThatReturnsHtml = () => {
-                    let matched = false;
-                    path.traverse({
-                        ReturnStatement(rPath: any) {
-                            const arg = rPath.node.argument as any;
-                            if (!arg) return;
-                            if (t.isArrowFunctionExpression(arg) || t.isFunctionExpression(arg)) {
-                                // body peut être un template tag html directement, ou un block avec return html`...`
-                                const body: any = arg.body;
-                                if (isHtmlTagged(body)) {
-                                    matched = true;
-                                    return;
-                                }
-                                if (t.isBlockStatement(body)) {
-                                    for (const st of body.body) {
-                                        if (t.isReturnStatement(st) && st.argument && isHtmlTagged(st.argument)) {
-                                            matched = true;
-                                            return;
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                    });
-                    return matched;
-                };
-
                 const usesDirectHtml = fnReturnsHtmlDirect();
-                const usesSetupReturningView = !usesDirectHtml && fnReturnsViewThatReturnsHtml();
-
-                if (!usesDirectHtml && !usesSetupReturningView) return;
+                if (!usesDirectHtml) return;
 
                 changed = true;
 
@@ -124,22 +94,20 @@ export const autoComponentsPlugin = (
                     const viewName = `${originalName}View`;
                     // 1) on renomme la fonction originale -> FooView
                     decl.id = t.identifier(viewName);
-                    // On conserve les paramètres de la fonction originale (props, etc.)
-                    const params = decl.params;
-                    // 2) crée: export const Foo = defineComponent((props) => () => FooView(props));
+                    // 2) crée: export const Foo = defineComponent((...args) => FooView(...args));
+                    //    Utilisation d'un rest parameter pour éviter les erreurs Babel
+                    //    lorsque les paramètres originaux sont des patterns (ObjectPattern, ArrayPattern).
+                    const restId = t.identifier('args');
                     const wrapperComponent = t.exportNamedDeclaration(
                         t.variableDeclaration('const', [
                             t.variableDeclarator(
                                 t.identifier(originalName),
                                 t.callExpression(t.identifier('defineComponent'), [
                                     t.arrowFunctionExpression(
-                                        params,
-                                        t.arrowFunctionExpression(
-                                            [],
-                                            t.callExpression(
-                                                t.identifier(viewName),
-                                                params.map(p => (t.isIdentifier(p) ? t.identifier(p.name) : (p as any)))
-                                            ),
+                                        [t.restElement(restId)],
+                                        t.callExpression(
+                                            t.identifier(viewName),
+                                            [t.spreadElement(restId)]
                                         ),
                                     ),
                                 ]),
@@ -149,25 +117,6 @@ export const autoComponentsPlugin = (
                     );
                     path.replaceWithMultiple([decl, wrapperComponent]);
                     return;
-                }
-
-                if (usesSetupReturningView) {
-                    // La fonction exportée est déjà un setup qui retourne une View.
-                    // On la renomme en FooSetup et on exporte const Foo = defineComponent(FooSetup)
-                    const setupName = `${originalName}Setup`;
-                    decl.id = t.identifier(setupName);
-                    const wrapper = t.exportNamedDeclaration(
-                        t.variableDeclaration('const', [
-                            t.variableDeclarator(
-                                t.identifier(originalName),
-                                t.callExpression(t.identifier('defineComponent'), [
-                                    t.identifier(setupName),
-                                ]),
-                            ),
-                        ]),
-                        [],
-                    );
-                    path.replaceWithMultiple([decl, wrapper]);
                 }
             },
         });
