@@ -1,0 +1,27 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "stripInternal": false,
+    "allowImportingTsExtensions": false
+  },
+  "include": [
+    "src/index.ts",
+    "src/lib/**/*.ts",
+    "src/plugins/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/server.js",
+    "src/components/**",
+    "src/entry-client.ts",
+    "src/entry-server.ts",
+    "src/main.ts"
+  ]
+}
