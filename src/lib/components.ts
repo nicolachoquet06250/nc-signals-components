@@ -78,11 +78,17 @@ export function html(strings: TemplateStringsArray, ...values: any[]): () => VNo
             continue;
         }
 
-        const attrMatch = /([^\s"'=<>]+)\s*=\s*["']?$/.exec(prev);
-        const inAttribute = !!attrMatch;
+        // Détection plus robuste: on ne considère une interpolation comme valeur d'attribut
+        // que si l'on est effectivement à l'intérieur d'une balise (<...>) et si le motif
+        // correspond bien à un nom d'attribut valide suivi d'un '=' éventuellement guillemeté.
+        // NOTE: Utiliser le tampon cumulé `out` (et non `prev`) permet de détecter correctement
+        // plusieurs attributs successifs dans la même balise.
+        const inTag = out.lastIndexOf('<') > out.lastIndexOf('>');
+        const attrMatch = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*["']?$/.exec(out);
+        const inAttribute = inTag && !!attrMatch;
 
         if (inAttribute) {
-            const attrMatch = /([^\s"'=<>]+)\s*=\s*["']?$/.exec(prev)!;
+            const attrMatch = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*["']?$/.exec(out)!;
             const attrName = attrMatch[1]; // ex: onclick, oncontextmenu, class, src, ...
 
             // --- Event : onXxx="${() => ...}" ---
@@ -99,7 +105,7 @@ export function html(strings: TemplateStringsArray, ...values: any[]): () => VNo
                         const el = root.querySelector<HTMLElement>(selector);
                         if (!el) return;
 
-                        const eventName = attrName.slice(2); // onclick -> click
+                        const eventName = attrName.slice(2).toLowerCase(); // onClick/onclick -> click, onContextMenu -> contextmenu
                         const handler = expr as (ev: Event) => void;
 
                         el.addEventListener(eventName, handler);
