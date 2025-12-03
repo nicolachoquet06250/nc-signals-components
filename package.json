@@ -1,7 +1,7 @@
 {
   "name": "nc-signals-components",
   "private": false,
-  "version": "1.1.10",
+  "version": "1.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,7 +12,9 @@
     "preview": "vite preview",
     "prepublishOnly": "npm run build:lib",
     "publish:public": "npm run build:lib && npm publish --access public",
-    "version:upgrade:patch": "verison=$(npm view nc-signals-components version) && npm version patch --no-git-tag-version && git commit -am \"chore(release): v$version\""
+    "version:upgrade:patch": "npm version patch",
+    "version:upgrade:minor": "npm version minor",
+    "version:upgrade:major": "npm version major"
   },
   "devDependencies": {
     "@types/babel__generator": "^7.27.0",
