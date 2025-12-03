@@ -37,6 +37,46 @@ export type CleanupFn = () => void;
 export type OnCleanup = (fn: CleanupFn) => void;
 export type StopHandle = () => void;
 
+// ---------- Array helpers typings (conditional methods for array-typed sources) ----------
+
+type ElementOf<A> = A extends (infer U)[] ? U : never;
+
+type ArraySourceMethods<T> = T extends any[]
+    ? {
+          map<U>(
+              mapper: (
+                  value: ElementOf<T>,
+                  index: number,
+                  array: ElementOf<T>[],
+              ) => U,
+          ): Computed<U[]>;
+          filter(
+              predicate: (
+                  value: ElementOf<T>,
+                  index: number,
+                  array: ElementOf<T>[],
+              ) => boolean,
+          ): Computed<ElementOf<T>[]>;
+          reduce(
+              reducer: (
+                  acc: ElementOf<T>,
+                  value: ElementOf<T>,
+                  index: number,
+                  array: ElementOf<T>[],
+              ) => ElementOf<T>,
+          ): Computed<ElementOf<T>>;
+          reduce<R>(
+              reducer: (
+                  acc: R,
+                  value: ElementOf<T>,
+                  index: number,
+                  array: ElementOf<T>[],
+              ) => R,
+              initialValue: R,
+          ): Computed<R>;
+      }
+    : {};
+
 // ---------- Infrastructure interne (fonctionnelle) ----------
 
 type Dep = Set<ReactiveEffect<any>>;
@@ -134,7 +174,10 @@ function trigger(target: object): void {
 
 // ---------- signal (fonctionnel + closures) ----------
 
-export function signal<T>(initial: T): Signal<T> {
+export function signal<
+    T,
+    R = Signal<T> & (T extends any[] ? ArraySourceMethods<T> : {})
+>(initial: T): R {
     let current = initial;
     const target = {}; // pour tracking
 
@@ -171,7 +214,10 @@ export function signal<T>(initial: T): Signal<T> {
     fn.set = write;
     fn.update = updater => write(updater);
 
-    return fn;
+    // Attache dynamiquement les méthodes type Array si la valeur est un tableau
+    tryAttachArrayMethods(() => fn.value, fn);
+
+    return fn as R;
 }
 
 // ---------- computed (read-only) ----------
@@ -179,11 +225,12 @@ export function signal<T>(initial: T): Signal<T> {
 export function computed<
     T,
     T2 extends ComputedGetter<T> | ComputedOptions<T>,
-    T3 = T2 extends ComputedGetter<infer R> ? R : (T2 extends ComputedOptions<infer R2> ? R2 : T)
->(arg: T2): Computed<
-    T3,
-    T2 extends ComputedGetter<T> ? 'readonly' : 'writable'
-> {
+    T3 = T2 extends ComputedGetter<infer R> ? R : (T2 extends ComputedOptions<infer R2> ? R2 : T),
+    R = (Computed<
+        T3,
+        T2 extends ComputedGetter<T> ? 'readonly' : 'writable'
+    > & (T extends any[] ? ArraySourceMethods<T> : {}))
+>(arg: T2): R {
     const isOptions = typeof arg === 'object';
 
     const getter: ComputedGetter<T> = isOptions
@@ -222,7 +269,10 @@ export function computed<
             get: read,
         });
 
-        return fn as unknown as Computed<T3, 'writable'>;
+        // Attache dynamiquement les méthodes type Array si la valeur est un tableau
+        tryAttachArrayMethods(read, fn);
+
+        return fn as unknown as R;
     }
 
     // --- writable computed ---
@@ -244,7 +294,10 @@ export function computed<
 
     fn.set = write;
 
-    return fn as unknown as Computed<T3, 'writable'>;
+    // Attache dynamiquement les méthodes type Array si la valeur est un tableau
+    tryAttachArrayMethods(read, fn);
+
+    return fn as unknown as R;
 }
 
 // ---------- watchEffect ----------
@@ -367,29 +420,115 @@ export function watchOnce<T>(
     return stop;
 }
 
-// ---------- Exemple d’usage ----------
+// ---------- Helpers: Array iterators (map/filter/reduce) ----------
 
-/*
-const count = signal(0);
-const double = computed(() => count.value * 2);
+// mapArray
+export function mapArray<T, U>(
+    source: T[],
+    mapper: (value: T, index: number, array: T[]) => U,
+): U[];
+export function mapArray<T, U>(
+    source: WatchSource<T[]>,
+    mapper: (value: T, index: number, array: T[]) => U,
+): Computed<U[]>;
+export function mapArray<T, U, R = U[] | Computed<U[]>>(
+    source: T[] | WatchSource<T[]>,
+    mapper: (value: T, index: number, array: T[]) => U,
+): R {
+    if (Array.isArray(source)) {
+        return source.map(mapper) as R;
+    }
+    const getter = normalizeWatchSource(source as WatchSource<T[]>);
+    return computed(() => getter().map(mapper)) as R;
+}
 
-const stopEffect = watchEffect(() => {
-  console.log('count =', count.value, 'double =', double.value);
-});
+// filterArray
+export function filterArray<T>(
+    source: T[],
+    predicate: (value: T, index: number, array: T[]) => boolean,
+): T[];
+export function filterArray<T>(
+    source: WatchSource<T[]>,
+    predicate: (value: T, index: number, array: T[]) => boolean,
+): Computed<T[]>;
+export function filterArray<T, R = T[] | Computed<T[]>>(
+    source: T[] | WatchSource<T[]>,
+    predicate: (value: T, index: number, array: T[]) => boolean,
+): R {
+    if (Array.isArray(source)) {
+        return source.filter(predicate) as R;
+    }
+    const getter = normalizeWatchSource(source as WatchSource<T[]>);
+    return computed(() => getter().filter(predicate)) as R;
+}
 
-count.set(1);
-count.update((n) => n + 1);
+// reduceArray
+export function reduceArray<T>(
+    source: T[],
+    reducer: (acc: T, value: T, index: number, array: T[]) => T,
+): T;
+export function reduceArray<T, R>(
+    source: T[],
+    reducer: (acc: R, value: T, index: number, array: T[]) => R,
+    initialValue: R,
+): R;
+export function reduceArray<T>(
+    source: WatchSource<T[]>,
+    reducer: (acc: T, value: T, index: number, array: T[]) => T,
+): Computed<T>;
+export function reduceArray<T, R>(
+    source: WatchSource<T[]>,
+    reducer: (acc: R, value: T, index: number, array: T[]) => R,
+    initialValue: R,
+): Computed<R>;
+export function reduceArray<T, R = T>(
+    source: T[] | WatchSource<T[]>,
+    reducer: (acc: any, value: T, index: number, array: T[]) => any,
+    initialValue?: any,
+): any {
+    if (Array.isArray(source)) {
+        if (arguments.length >= 3) {
+            return (source as T[]).reduce(reducer as any, initialValue);
+        }
+        return (source as T[]).reduce(reducer as any);
+    }
+    const getter = normalizeWatchSource(source as WatchSource<T[]>);
+    if (arguments.length >= 3) {
+        return computed(() => getter().reduce(reducer as any, initialValue)) as Computed<R>;
+    }
+    return computed(() => getter().reduce(reducer as any)) as Computed<T>;
+}
 
-const stopWatch = watch(
-  double,
-  (value, oldValue) => {
-    console.log('double changed from', oldValue, 'to', value);
-  },
-  { immediate: true },
-);
+// ---------- Internal: attach array-like methods to reactive sources ----------
 
-const stopOnce = watchOnce(count, (value) => {
-  console.log('watchOnce =>', value);
-});
-*/
+function tryAttachArrayMethods<T>(get: () => T, target: any): void {
+    let value: unknown;
+    try {
+        value = get();
+    } catch {
+        // en cas d'accès hors tracking, on ignore et n'attache pas
+        return;
+    }
+    if (!Array.isArray(value)) return;
 
+    if (typeof target.map !== 'function') {
+        Object.defineProperty(target, 'map', {
+            value: (mapper: (v: any, i: number, a: any[]) => any) =>
+                mapArray(target as unknown as WatchSource<any[]>, mapper),
+            enumerable: false,
+        });
+    }
+    if (typeof target.filter !== 'function') {
+        Object.defineProperty(target, 'filter', {
+            value: (predicate: (v: any, i: number, a: any[]) => boolean) =>
+                filterArray(target as unknown as WatchSource<any[]>, predicate),
+            enumerable: false,
+        });
+    }
+    if (typeof target.reduce !== 'function') {
+        Object.defineProperty(target, 'reduce', {
+            value: (...args: any[]) => (reduceArray as any)(target as unknown as WatchSource<any[]>, ...args),
+            enumerable: false,
+        });
+    }
+}

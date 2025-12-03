@@ -37,19 +37,75 @@ function isView(v: any): v is View {
 function resolveScalar(v: any): string {
     if (v == null || v === false) return '';
 
-    if (typeof v === 'function' && !(v as any).__isView) {
-        return resolveScalar(v());
+    // View -> rendre le HTML du view()
+    if (isView(v)) {
+        const vnode = (v as View)();
+        return vnode.html;
     }
 
-    if (typeof v === 'object' && 'value' in v) {
+    // VNode -> HTML direct
+    if (isVNode(v)) {
+        return (v as VNode).html;
+    }
+
+    // Fonction (ex: Component sans props ou factory) -> invoquer et résoudre
+    if (typeof v === 'function') {
+        return resolveScalar((v as Function)());
+    }
+
+    // Signal/Computed-like ({ value })
+    if (typeof v === 'object' && v && 'value' in v) {
         return resolveScalar(v.value);
     }
 
+    // Tableau: concatène le HTML/texte de chaque élément
     if (Array.isArray(v)) {
         return v.map(resolveScalar).join('');
     }
 
     return String(v);
+}
+
+// Résout une expression potentiellement réactive en { html, setups }
+function resolveToHTMLAndSetups(v: any): { html: string; setups: DomSetup[] } {
+    if (v == null || v === false) return { html: '', setups: [] };
+
+    // Unwrap Signal/Computed
+    if (typeof v === 'object' && v && 'value' in v) {
+        return resolveToHTMLAndSetups((v as any).value);
+    }
+
+    // View
+    if (isView(v)) {
+        const vnode = (v as View)();
+        return { html: vnode.html, setups: [...vnode.setups] };
+    }
+
+    // VNode
+    if (isVNode(v)) {
+        const vnode = v as VNode;
+        return { html: vnode.html, setups: [...vnode.setups] };
+    }
+
+    // Function (component factory without props, lazy builder, etc.)
+    if (typeof v === 'function') {
+        return resolveToHTMLAndSetups((v as Function)());
+    }
+
+    // Array: concatène tout
+    if (Array.isArray(v)) {
+        let html = '';
+        const setups: DomSetup[] = [];
+        for (const it of v) {
+            const r = resolveToHTMLAndSetups(it);
+            html += r.html;
+            if (r.setups.length) setups.push(...r.setups);
+        }
+        return { html, setups };
+    }
+
+    // Scalaire -> texte
+    return { html: String(v), setups: [] };
 }
 
 // ---------- html tag ----------
@@ -121,8 +177,77 @@ export function html(strings: TemplateStringsArray, ...values: any[]): () => VNo
             }
 
             // --- Attribut "normal" ---
-            const scalar = resolveScalar(expr);
-            out += scalar;
+            // Pour SSR, on imprime la valeur résolue une fois.
+            // Pour client, on insère un id marqueur et on configure une mise à jour réactive.
+
+            const id = `attr-part-${partId++}`;
+            if (renderMode === 'server') {
+                const scalar = resolveScalar(expr);
+                out += scalar;
+            } else {
+                // Ecrire un placeholder pour pouvoir retrouver l'élément
+                out += id;
+                attrParts.push(root => {
+                    const selector = `[${attrName}="${id}"]`;
+                    const el = root.querySelector<HTMLElement>(selector) as any;
+                    if (!el) return;
+
+                    // Nettoie l'attribut placeholder
+                    el.removeAttribute(attrName);
+
+                    const resolveAttr = (v: any): any => {
+                        if (v == null || v === false) return v;
+                        // unwrap Signal/Computed
+                        if (typeof v === 'object' && 'value' in v) return resolveAttr((v as any).value);
+                        // invoke factory functions
+                        if (typeof v === 'function') return resolveAttr((v as Function)());
+                        // arrays: join with space (useful for class)
+                        if (Array.isArray(v)) return v.map(x => resolveAttr(x)).join(' ');
+                        return v;
+                    };
+
+                    const stop = watchEffect(() => {
+                        const raw = resolveAttr(expr);
+                        const name = attrName.toLowerCase();
+
+                        // value/checked syncing for form controls
+                        if (name === 'value') {
+                            if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+                                const next = raw == null ? '' : String(raw);
+                                // Avoid echo/jitter: only set when different
+                                if (el.value !== next) {
+                                    el.value = next;
+                                }
+                                return;
+                            }
+                        }
+
+                        if (name === 'checked') {
+                            if (el instanceof HTMLInputElement) {
+                                const nextBool = !!raw;
+                                if (el.checked !== nextBool) {
+                                    el.checked = nextBool;
+                                }
+                                return;
+                            }
+                        }
+
+                        // Generic attribute update
+                        if (raw == null || raw === false) {
+                            el.removeAttribute(attrName);
+                        } else {
+                            const val = String(raw);
+                            if (el.getAttribute(attrName) !== val) {
+                                el.setAttribute(attrName, val);
+                            }
+                        }
+                    });
+
+                    return () => {
+                        stop();
+                    };
+                });
+            }
 
             continue;
         }
@@ -151,21 +276,52 @@ export function html(strings: TemplateStringsArray, ...values: any[]): () => VNo
                 }
                 if (!start || !end) return;
 
-                let ptr = start.nextSibling;
-                while (ptr && ptr !== end) {
-                    const next = ptr.nextSibling;
-                    ptr.parentNode?.removeChild(ptr);
-                    ptr = next;
-                }
+                // Nettoie le contenu courant entre start et end
+                const clearBetween = () => {
+                    let ptr = start!.nextSibling;
+                    while (ptr && ptr !== end) {
+                        const next = ptr.nextSibling;
+                        ptr.parentNode?.removeChild(ptr);
+                        ptr = next;
+                    }
+                };
 
-                const textNode = document.createTextNode('');
-                start.parentNode!.insertBefore(textNode, end);
+                let cleanupFns: Array<() => void> = [];
 
                 const stop = watchEffect(() => {
-                    textNode.textContent = resolveScalar(expr);
+                    // Cleanup previous setups
+                    if (cleanupFns.length) {
+                        for (const fn of cleanupFns) try { fn(); } catch {}
+                        cleanupFns = [];
+                    }
+
+                    // Resolve dynamic content
+                    const res = resolveToHTMLAndSetups(expr);
+
+                    // Replace nodes between markers with parsed HTML
+                    clearBetween();
+                    if (res.html) {
+                        const tpl = document.createElement('template');
+                        tpl.innerHTML = res.html;
+                        start!.parentNode!.insertBefore(tpl.content, end);
+                    }
+
+                    // Run setups in the context of the root container
+                    for (const s of res.setups) {
+                        const c = s(root);
+                        if (typeof c === 'function') cleanupFns.push(c);
+                    }
                 });
 
-                return () => stop();
+                return () => {
+                    // stop reactive effect and cleanup nodes/setups
+                    stop();
+                    if (cleanupFns.length) {
+                        for (const fn of cleanupFns) try { fn(); } catch {}
+                        cleanupFns = [];
+                    }
+                    clearBetween();
+                };
             });
         }
     }

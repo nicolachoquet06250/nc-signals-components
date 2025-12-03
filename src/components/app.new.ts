@@ -1,24 +1,52 @@
 import typescriptLogo from '../assets/typescript.svg'
 import viteLogo from '/vite.svg'
-import {html} from '../lib/components';
+import {html} from '../lib/components.ts';
+import {signal} from "../lib/signals.ts";
 import {Counter} from "./counter.new";
+import {ListItem} from "./list-item.new.ts";
 
 type Props = {
     client?: boolean
 };
 
-export const App = ({client = true} : Props)=> html`<div>
-    <a href="https://vite.dev">
-        <img src="${viteLogo}" alt="vite logo" class="logo"/>
-    </a>
+export function App({client = true} : Props) {
+    const test = signal<string[]>([]);
+    const newValue = signal('');
 
-    <a href="https://www.typescriptlang.org/">
-        <img src="${typescriptLogo}" alt="typescript logo" class="logo vanilla"/>
-    </a>
+    const handleSubmit = (e: SubmitEvent) => {
+        e.preventDefault();
+        test.set(t => [...t, newValue()]);
+        newValue.set('');
+    }
+    const handleInput = (e: InputEvent) => {
+        newValue.set((e.target as HTMLInputElement).value);
+    }
 
-    <h1>Vite + TypeScript ${client ? 'CSR' : 'SSR'}</h1>
+    return html`<div>
+        <a href="https://vite.dev">
+            <img src="${viteLogo}" alt="vite logo" class="logo"/>
+        </a>
 
-    ${Counter({label: "Clicks"})}
+        <a href="https://www.typescriptlang.org/">
+            <img src="${typescriptLogo}" alt="typescript logo" class="logo vanilla"/>
+        </a>
 
-    <p>Click logos to learn more</p>
-</div>`;
+        <h1>Vite + TypeScript ${client ? 'CSR' : 'SSR'}</h1>
+        
+        <ul>
+            ${test.map(t => ListItem({text: t}))}
+        </ul>
+
+        ${Counter({label: "Clicks"})}
+        
+        <form onsubmit="${handleSubmit}">
+            <div style="margin-bottom: 10px;">
+                <input type="text" value="${newValue}" oninput="${handleInput}"/>
+            </div>
+            
+            <button type="submit">Créer un item</button>
+        </form>
+
+        <p>Click logos to learn more</p>
+    </div>`;
+}
