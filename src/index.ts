@@ -5,4 +5,7 @@
 // afin d'éviter "ERR_MODULE_NOT_FOUND" au runtime côté consommateur.
 export * from './lib/signals.js';
 export * from './lib/components.js';
-export * from './plugins/vite-plugin-autocomponent.js';
+// ATTENTION: n'exportez pas les plugins Vite depuis l'entrée principale destinée au navigateur.
+// Les plugins s'exécutent côté build (Node) et embarquer leurs dépendances ici
+// peut casser les consommateurs (ex: ReferenceError: process is not defined).
+// Pour utiliser le plugin, importez depuis le sous-chemin: "nc-signals-components/vite".
