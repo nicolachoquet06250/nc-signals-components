@@ -1,4 +1,4 @@
-﻿# nc-signals-components
+﻿# nc-signals-components [![npm](https://github.com/nicolachoquet06250/nc-signals-components/actions/workflows/npm-package-deploy.yml/badge.svg)](https://github.com/nicolachoquet06250/nc-signals-components/actions/workflows/npm-package-deploy.yml)
 
 Librairie en TypeScript proposant :
 
@@ -232,4 +232,5 @@ export default defineConfig({
 Consultez la documentation complète (API, exemples, FAQ, plugin Vite, bonnes pratiques):
 
 - [DOCUMENTATION.md](./DOCUMENTATION.md) 
+
 
