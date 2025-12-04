@@ -125,7 +125,12 @@ export function html(strings: TemplateStringsArray, ...values: any[]): () => VNo
 
         if (i >= values.length) continue;
 
-        const expr = values[i];
+        let expr = values[i];
+
+        console.log('expr', typeof expr === 'function' && expr.toString().includes('return view;'), expr.name, expr);
+        if (typeof expr === 'function' && expr.toString().includes('return view;')) {
+            expr = expr();
+        }
 
         if (isView(expr) || isVNode(expr)) {
             const vnode = isView(expr) ? (expr as View)() : (expr as VNode);

@@ -5,7 +5,7 @@ type Props = {
     label: string
 };
 
-export function Counter(props: Props) {
+export function Counter(props: Props = {label: "Clicks"}) {
     const count = signal(0);
     const double = computed(() => count() * 2);
 
