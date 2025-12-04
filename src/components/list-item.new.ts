@@ -4,4 +4,6 @@ type Props = {
     text: string
 }
 
-export const ListItem = ({text}: Props)=> html`<li>${text}</li>`;
+export function ListItem({text}: Props){
+    return html`<li>${text}</li>`;
+}
