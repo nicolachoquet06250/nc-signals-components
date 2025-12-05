@@ -17,8 +17,17 @@ async function createServer() {
 
     app.get('/', async (_req, res) => {
         try {
-            const {render} = await vite.ssrLoadModule('/src/entry-server.ts')
-            const appHtml = render();
+            const {render} = await vite.ssrLoadModule('/src/entry-server.ts');
+            let appHtml = render();
+
+            // Extraire éventuellement un <head> rendu par l'app pour l'injecter dans la <head> du shell
+            const { extractHeadFromHtml } = await vite.ssrLoadModule('/src/lib/ssr.ts');
+            const {
+                htmlWithoutHead,
+                title: pageTitle,
+                headExtra
+            } = extractHeadFromHtml(appHtml, 'SSR + Hydrate Signals');
+            appHtml = htmlWithoutHead;
 
             const manifest = JSON.parse(fs.readFileSync('./dist/.vite/manifest.json', 'utf-8'));
 
@@ -34,8 +43,9 @@ async function createServer() {
                 <meta charset="UTF-8" />
                 <link rel="icon" type="image/svg+xml" href="/vite.svg" />
                 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-                <title>SSR + Hydrate Signals</title>
+                <title>${pageTitle ?? 'SSR + Hydrate Signals'}</title>
                 ${stylePaths.map(path => `<link rel="stylesheet" href="${path}">`).join('\n')}
+                ${headExtra}
               </head>
               <body>
                 <div id="app">${appHtml}</div>

@@ -21,7 +21,11 @@ export function App({client = true} : Props) {
         newValue.set('');
     }
 
-    return html`<div>
+    return html`<head>
+        <title>test change title ${client ? 'CSR' : 'SSR'}</title>
+    </head>
+    
+    <div>
         <a href="https://vite.dev">
             <img src="${viteLogo}" alt="vite logo" class="logo"/>
         </a>

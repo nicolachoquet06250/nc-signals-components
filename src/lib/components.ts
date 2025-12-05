@@ -115,13 +115,27 @@ let partId = 0;
 export function html(strings: TemplateStringsArray, ...values: any[]): () => VNode {
     const setups: DomSetup[] = [];
     let out = '';
+    // Conserve une version non transformée pour la détection de contexte (<head>/<title>)
+    let rawOut = '';
 
     const textParts: DomSetup[] = [];
     const attrParts: DomSetup[] = [];
 
+    // Remplace les balises <head> dans le HTML client par un conteneur virtuel valide dans <body>
+    const transformHeadTags = (s: string) =>
+        s.replace(/<head(\s|>)/gi, '<div data-virtual-head$1').replace(/<\/head>/gi, '</div>');
+
+    // Collecteur spécial pour construire un titre réactif complet
+    // lorsqu'un <title> contient des expressions interpolées.
+    // Il concatène les parties statiques + dynamiques et applique
+    // une unique watchEffect qui met à jour document.title.
+    type TitleSegment = string | (() => string);
+    let titleCollector: { segments: TitleSegment[] } | null = null;
+
     for (let i = 0; i < strings.length; i++) {
         const prev = strings[i];
-        out += prev;
+        rawOut += prev;
+        out += (renderMode === 'client') ? transformHeadTags(prev) : prev;
 
         if (i >= values.length) continue;
 
@@ -133,7 +147,8 @@ export function html(strings: TemplateStringsArray, ...values: any[]): () => VNo
 
         if (isView(expr) || isVNode(expr)) {
             const vnode = isView(expr) ? (expr as View)() : (expr as VNode);
-            out += vnode.html;
+            rawOut += vnode.html;
+            out += (renderMode === 'client') ? transformHeadTags(vnode.html) : vnode.html;
             setups.push(...vnode.setups);
             continue;
         }
@@ -193,11 +208,31 @@ export function html(strings: TemplateStringsArray, ...values: any[]): () => VNo
                 out += id;
                 attrParts.push(root => {
                     const selector = `[${attrName}="${id}"]`;
-                    const el = root.querySelector<HTMLElement>(selector) as any;
+                    let el = root.querySelector<HTMLElement>(selector) as any;
+
+                    // Hydration fallback: on SSR markup the placeholder id is not present.
+                    // Try to bind by occurrence order to the next element that has this attribute.
+                    if (!el) {
+                        const all = root.querySelectorAll<HTMLElement>(`[${attrName}]`);
+                        // Per-root index map to keep consistent ordering across multiple bindings
+                        const mapKey = '__attrIdxMap__';
+                        const idxMap: Map<string, number> = ((root as any)[mapKey] ||= new Map<string, number>());
+                        const nextIdx = idxMap.get(attrName) || 0;
+                        if (nextIdx < all.length) {
+                            el = all[nextIdx] as any;
+                            idxMap.set(attrName, nextIdx + 1);
+                        }
+                    }
+
                     if (!el) return;
 
-                    // Nettoie l'attribut placeholder
-                    el.removeAttribute(attrName);
+                    // Nettoie l'attribut placeholder uniquement s'il correspond au placeholder
+                    // (en hydratation SSR, la valeur réelle peut être présente et doit être respectée)
+                    try {
+                        if (el.getAttribute(attrName) === id) {
+                            el.removeAttribute(attrName);
+                        }
+                    } catch {}
 
                     const resolveAttr = (v: any): any => {
                         if (v == null || v === false) return v;
@@ -296,77 +331,146 @@ export function html(strings: TemplateStringsArray, ...values: any[]): () => VNo
             continue;
         }
 
+        // Détection du contexte HEAD/TITLE pour brancher des comportements spéciaux (maj <head>)
+        const lowerOut = rawOut.toLowerCase();
+        const inHeadCtx = lowerOut.lastIndexOf('<head') > lowerOut.lastIndexOf('</head>');
+        const inTitleCtx = lowerOut.lastIndexOf('<title') > lowerOut.lastIndexOf('</title>');
+
         if (renderMode === 'server') {
             const text = resolveScalar(expr);
             const marker = `text-part-${partId++}`;
             out += `<!--s${marker}-->${text}<!--e${marker}-->`;
+            rawOut += `<!--s${marker}-->${text}<!--e${marker}-->`;
         } else {
-            const id = `text-part-${partId++}`;
-
-            out += `<!--s${id}--><!--e${id}-->`;
-
-            textParts.push(root => {
-                // Trouve les deux marqueurs
-                const walker = document.createTreeWalker(root, NodeFilter.SHOW_COMMENT);
-                let start: Comment | null = null;
-                let end: Comment | null = null;
-
-                let n = walker.nextNode();
-                while (n) {
-                    const c = n as Comment;
-                    if (c.nodeValue === `s${id}`) start = c;
-                    if (c.nodeValue === `e${id}`) { end = c; break; }
-                    n = walker.nextNode();
+            // Si on est dans <head><title> ... ${expr} ... </title>, on construit
+            // un builder qui recompose le titre complet (parties statiques + dynamiques)
+            // et applique une seule watchEffect.
+            if (inHeadCtx && inTitleCtx) {
+                // 1) Ajouter la portion statique de "prev" qui se trouve APRES l'ouverture <title...>
+                const prevLower = prev.toLowerCase();
+                if (!titleCollector) {
+                    const openIdx = prevLower.lastIndexOf('<title');
+                    if (openIdx !== -1) {
+                        // trouver le '>' correspondant (dans la même chaîne prev)
+                        const gtIdx = prev.indexOf('>', openIdx);
+                        const staticStart = gtIdx === -1 ? (openIdx + '<title'.length) : (gtIdx + 1);
+                        titleCollector = { segments: [] };
+                        titleCollector.segments.push(prev.substring(staticStart));
+                    } else {
+                        // déjà dans un titre ouvert plus tôt, on prend tout prev
+                        titleCollector = titleCollector || { segments: [] };
+                        titleCollector.segments.push(prev);
+                    }
+                } else {
+                    // Titre déjà en cours de collecte
+                    titleCollector.segments.push(prev);
                 }
-                if (!start || !end) return;
 
-                // Nettoie le contenu courant entre start et end
-                const clearBetween = () => {
-                    let ptr = start!.nextSibling;
-                    while (ptr && ptr !== end) {
-                        const next = ptr.nextSibling;
-                        ptr.parentNode?.removeChild(ptr);
-                        ptr = next;
+                // 2) Ajouter le segment dynamique courant
+                const initial = resolveScalar(expr);
+                out += String(initial);
+                rawOut += String(initial);
+                // stocker un resolver dynamique
+                titleCollector.segments.push(() => String(resolveScalar(expr)));
+
+                // 3) Regarder la chaîne suivante pour voir si </title> y figure
+                const nextStr = strings[i + 1] ?? '';
+                const nextLower = nextStr.toLowerCase();
+                const closeIdx = nextLower.indexOf('</title>');
+                if (closeIdx !== -1) {
+                    // Ajouter la partie statique avant </title>
+                    const staticTail = nextStr.substring(0, closeIdx);
+                    if (staticTail) titleCollector.segments.push(staticTail);
+
+                    // Enregistrer une watch unique pour ce titre
+                    const segments = titleCollector.segments.slice();
+                    partId++; // consommer un id pour rester aligné avec SSR
+                    textParts.push(() => {
+                        const stop = watchEffect(() => {
+                            try {
+                                const built = segments.map(seg =>
+                                    typeof seg === 'function' ? (seg as () => string)() : seg
+                                ).join('');
+                                if (typeof document !== 'undefined' && document.title !== built) {
+                                    document.title = built;
+                                }
+                            } catch {}
+                        });
+                        return () => stop();
+                    });
+
+                    // Fin de collecte pour ce <title>
+                    titleCollector = null;
+                }
+            } else {
+                const id = `text-part-${partId++}`;
+
+                out += `<!--s${id}--><!--e${id}-->`;
+                rawOut += `<!--s${id}--><!--e${id}-->`;
+
+                textParts.push(root => {
+                    // Trouve les deux marqueurs
+                    const walker = document.createTreeWalker(root, NodeFilter.SHOW_COMMENT);
+                    let start: Comment | null = null;
+                    let end: Comment | null = null;
+
+                    let n = walker.nextNode();
+                    while (n) {
+                        const c = n as Comment;
+                        if (c.nodeValue === `s${id}`) start = c;
+                        if (c.nodeValue === `e${id}`) { end = c; break; }
+                        n = walker.nextNode();
                     }
-                };
+                    if (!start || !end) return;
 
-                let cleanupFns: Array<() => void> = [];
+                    // Nettoie le contenu courant entre start et end
+                    const clearBetween = () => {
+                        let ptr = start!.nextSibling;
+                        while (ptr && ptr !== end) {
+                            const next = ptr.nextSibling;
+                            ptr.parentNode?.removeChild(ptr);
+                            ptr = next;
+                        }
+                    };
 
-                const stop = watchEffect(() => {
-                    // Cleanup previous setups
-                    if (cleanupFns.length) {
-                        for (const fn of cleanupFns) try { fn(); } catch {}
-                        cleanupFns = [];
-                    }
+                    let cleanupFns: Array<() => void> = [];
 
-                    // Resolve dynamic content
-                    const res = resolveToHTMLAndSetups(expr);
+                    const stop = watchEffect(() => {
+                        // Cleanup previous setups
+                        if (cleanupFns.length) {
+                            for (const fn of cleanupFns) try { fn(); } catch {}
+                            cleanupFns = [];
+                        }
 
-                    // Replace nodes between markers with parsed HTML
-                    clearBetween();
-                    if (res.html) {
-                        const tpl = document.createElement('template');
-                        tpl.innerHTML = res.html;
-                        start!.parentNode!.insertBefore(tpl.content, end);
-                    }
+                        // Resolve dynamic content
+                        const res = resolveToHTMLAndSetups(expr);
 
-                    // Run setups in the context of the root container
-                    for (const s of res.setups) {
-                        const c = s(root);
-                        if (typeof c === 'function') cleanupFns.push(c);
-                    }
+                        // Replace nodes between markers with parsed HTML
+                        clearBetween();
+                        if (res.html) {
+                            const tpl = document.createElement('template');
+                            tpl.innerHTML = res.html;
+                            start!.parentNode!.insertBefore(tpl.content, end);
+                        }
+
+                        // Run setups in the context of the root container
+                        for (const s of res.setups) {
+                            const c = s(root);
+                            if (typeof c === 'function') cleanupFns.push(c);
+                        }
+                    });
+
+                    return () => {
+                        // stop reactive effect and cleanup nodes/setups
+                        stop();
+                        if (cleanupFns.length) {
+                            for (const fn of cleanupFns) try { fn(); } catch {}
+                            cleanupFns = [];
+                        }
+                        clearBetween();
+                    };
                 });
-
-                return () => {
-                    // stop reactive effect and cleanup nodes/setups
-                    stop();
-                    if (cleanupFns.length) {
-                        for (const fn of cleanupFns) try { fn(); } catch {}
-                        cleanupFns = [];
-                    }
-                    clearBetween();
-                };
-            });
+            }
         }
     }
 
@@ -378,6 +482,100 @@ export function html(strings: TemplateStringsArray, ...values: any[]): () => VNo
                 if (typeof c === 'function') cleanups.push(c);
             }
             return () => cleanups.forEach(fn => fn());
+        });
+
+        // Synchronisation des éventuels <head>...</head> rendus dans la vue
+        setups.push(root => {
+            // Cherche des balises <head> dans le fragment rendu et synchronise le titre/meta vers document.head
+            const owner = `head-sync-${partId++}`;
+            const heads = root.querySelectorAll('head, [data-virtual-head]');
+            const observers: MutationObserver[] = [];
+            const allowed = new Set(['title','meta','link','base','style']);
+
+            const syncFrom = (h: Element) => {
+                // Titre
+                const t = h.querySelector('title');
+                if (t) {
+                    const txt = t.textContent ?? '';
+                    if (typeof document !== 'undefined' && document.title !== txt) {
+                        document.title = txt;
+                    }
+                }
+
+                // Avertir si des tags non supportés sont utilisés dans <head>
+                const allHeadChildren = h.querySelectorAll('*');
+                allHeadChildren.forEach(el => {
+                    const tag = el.tagName.toLowerCase();
+                    if (!allowed.has(tag)) {
+                        // avertir une fois par élément (marquer pour éviter répétition extrême)
+                        if (!(el as any).__warnedUnsupportedHead) {
+                            (el as any).__warnedUnsupportedHead = true;
+                            try {
+                                console.warn(`[signals] Balise <${tag}> dans <head> non prise en charge: elle ne sera pas synchronisée vers document.head.`);
+                            } catch {}
+                        }
+                    }
+                });
+
+                // Synchroniser meta/link/base/style
+                const existing = document.head.querySelectorAll(`[data-ssr-owner="${owner}"]`);
+                existing.forEach(n => n.parentElement?.removeChild(n));
+
+                const stripMarkers = (s: string) => s.replace(/<!--[\s\S]*?-->/g, '');
+
+                // meta, link, base -> clone direct
+                const simpleCopy = h.querySelectorAll('meta, link, base');
+                simpleCopy.forEach(el => {
+                    const clone = el.cloneNode(true) as Element;
+                    clone.setAttribute('data-ssr-owner', owner);
+                    document.head.appendChild(clone);
+                });
+
+                // style -> reconstruire pour nettoyer les marqueurs/commentaires internes
+                const styleEls = h.querySelectorAll('style');
+                styleEls.forEach(el => {
+                    const attrs: string[] = [];
+                    // recopier les attributs du style original
+                    for (const a of Array.from(el.attributes)) {
+                        attrs.push(`${a.name}="${a.value}"`);
+                    }
+                    const style = document.createElement('style');
+                    if (attrs.length) {
+                        for (const a of Array.from(el.attributes)) {
+                            try { style.setAttribute(a.name, a.value); } catch {}
+                        }
+                    }
+                    style.setAttribute('data-ssr-owner', owner);
+                    style.textContent = stripMarkers(el.textContent || '');
+                    document.head.appendChild(style);
+                });
+            };
+
+            heads.forEach(h => {
+                // sync initial
+                try { syncFrom(h); } catch {}
+                // observe modifications pour resync
+                const mo = new MutationObserver(() => {
+                    try { syncFrom(h); } catch {}
+                });
+                mo.observe(h, { childList: true, characterData: true, subtree: true, attributes: true });
+                observers.push(mo);
+
+                // Après avoir branché l'observer et synchronisé initialement, on vide le contenu
+                // du conteneur <head> virtuel et on le masque pour ne pas impacter l'affichage,
+                // tout en conservant ce nœud dans le DOM du composant afin que les effets réactifs
+                // puissent continuer à mettre à jour son contenu (qui sera répercuté dans document.head).
+                try {
+                    (h as HTMLElement).style.display = 'none';
+                    h.setAttribute('aria-hidden', 'true');
+                } catch {}
+            });
+
+            return () => {
+                observers.forEach(o => o.disconnect());
+                const owned = document.head.querySelectorAll(`[data-ssr-owner="${owner}"]`);
+                owned.forEach(n => n.parentElement?.removeChild(n));
+            };
         });
     }
 
