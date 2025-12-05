@@ -13,7 +13,7 @@ import {opendir} from "node:fs/promises";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const repoRoot = path.resolve(__dirname, '..');
+const repoRoot = path.resolve(__dirname, '..' + (__dirname.includes('node_modules') ? '/..' : ''));
 const srcDir = path.join(repoRoot, 'src', 'components');
 const goRoot = path.join(repoRoot, 'go');
 const assetsDir = path.join(goRoot, 'assets');
