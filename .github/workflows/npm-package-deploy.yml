@@ -3,9 +3,11 @@ on:
   push:
     branches: [ main ]
     paths:
+      - '.github/workflows/**'
       - 'src/lib/**'
       - 'src/plugins/**'
       - 'src/index.ts'
+      - 'scripts/ts2go.js'
       - 'package.json'
 jobs:
   pipeline:
