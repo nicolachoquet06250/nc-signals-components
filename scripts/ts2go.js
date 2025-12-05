@@ -479,7 +479,7 @@ type Manifest map[string]struct {
 	CSS     []string \`json:"css"\`
 }
 
-var port = flag.Int("port", 0, "port du server")
+var port = flag.Int("port", 8080, "port du server")
 
 func main() {
 	flag.Parse()
