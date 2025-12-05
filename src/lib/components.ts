@@ -11,17 +11,23 @@ export interface VNode {
     setups: DomSetup[];
 }
 
-export type View = () => VNode;
+export type View = {
+    (): VNode
+    mount(container: Element): StopHandle
+    hydrate(container: Element): StopHandle
+};
 export type Component<P = {}> = (props: P) => View;
 
 let renderMode: 'client' | 'server' = 'client';
 
 export function defineComponent<P>(setup: (props: P) => View): Component<P> {
-    return (props: P) => {
+    return function (props: P): View {
         const view = setup(props);
         (view as any).__isView = true;
+        view.mount = (container: Element) => mount(view, container);
+        view.hydrate = (container: Element)=> hydrate(view, container);
         return view;
-    };
+    }
 }
 
 // ---------- Helpers ----------
@@ -112,7 +118,7 @@ function resolveToHTMLAndSetups(v: any): { html: string; setups: DomSetup[] } {
 
 let partId = 0;
 
-export function html(strings: TemplateStringsArray, ...values: any[]): () => VNode {
+export function html(strings: TemplateStringsArray, ...values: any[]) {
     const setups: DomSetup[] = [];
     let out = '';
     // Conserve une version non transformée pour la détection de contexte (<head>/<title>)
@@ -579,11 +585,11 @@ export function html(strings: TemplateStringsArray, ...values: any[]): () => VNo
         });
     }
 
-    return () => ({
+    return (() => ({
         __isVNode: true as const,
         html: out,
         setups,
-    });
+    })) as View;
 }
 
 // ---------- mount : CSR classique (pas SSR) ----------
