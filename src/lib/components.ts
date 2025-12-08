@@ -147,7 +147,7 @@ export function html(strings: TemplateStringsArray, ...values: any[]) {
 
         let expr = values[i];
 
-        if (typeof expr === 'function' && expr.toString().includes('return view;')) {
+        if (typeof expr === 'function' && (expr.toString().includes('return view;') || expr.toString().includes('return n.__isView=!0'))) {
             expr = expr();
         }
 
@@ -173,7 +173,6 @@ export function html(strings: TemplateStringsArray, ...values: any[]) {
 
             // --- Event : onXxx="${() => ...}" ---
             const lowerAttrName = attrName.toLowerCase();
-            console.log(lowerAttrName, expr)
             if (lowerAttrName.startsWith('on') && typeof expr === 'function') {
                 const id = `ev-part-${partId++}`;
 
