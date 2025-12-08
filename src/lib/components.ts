@@ -183,7 +183,21 @@ export function html(strings: TemplateStringsArray, ...values: any[]) {
                 if (renderMode === 'client') {
                     attrParts.push(root => {
                         const selector = `[${attrName}="${id}"]`;
-                        const el = root.querySelector<HTMLElement>(selector);
+                        let el = root.querySelector<HTMLElement>(selector);
+
+                        // Hydration fallback: si l'id ne correspond pas (décalage SSR/CSR),
+                        // on associe par ordre d'apparition des éléments portant cet attribut événementiel.
+                        if (!el) {
+                            const all = root.querySelectorAll<HTMLElement>(`[${attrName}]`);
+                            const mapKey = '__evIdxMap__';
+                            const idxMap: Map<string, number> = ((root as any)[mapKey] ||= new Map<string, number>());
+                            const nextIdx = idxMap.get(attrName) || 0;
+                            if (nextIdx < all.length) {
+                                el = all[nextIdx] as HTMLElement;
+                                idxMap.set(attrName, nextIdx + 1);
+                            }
+                        }
+
                         if (!el) return;
 
                         const eventName = attrName.slice(2).toLowerCase(); // onClick/onclick -> click, onContextMenu -> contextmenu
