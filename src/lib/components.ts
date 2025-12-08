@@ -176,17 +176,16 @@ export function html(strings: TemplateStringsArray, ...values: any[]) {
             if (attrName.startsWith('on') && typeof expr === 'function') {
                 const id = `ev-part-${partId++}`;
 
-                // 🔴 IMPORTANT : on écrit le même id en SSR et en client
-                // pour que le DOM SSR et le DOM client aient la même valeur d'attribut.
-                out += id;
-
                 if (renderMode === 'client') {
+                    // The temporary `out` for parsing needs a value, but it won't be rendered.
+                    out += id;
+
                     attrParts.push(root => {
+                        // The querySelector by ID will now fail during hydration, which is expected.
                         const selector = `[${attrName}="${id}"]`;
                         let el = root.querySelector<HTMLElement>(selector);
 
-                        // Hydration fallback: si l'id ne correspond pas (décalage SSR/CSR),
-                        // on associe par ordre d'apparition des éléments portant cet attribut événementiel.
+                        // Hydration fallback will be used.
                         if (!el) {
                             const all = root.querySelectorAll<HTMLElement>(`[${attrName}]`);
                             const mapKey = '__evIdxMap__';
@@ -200,17 +199,19 @@ export function html(strings: TemplateStringsArray, ...values: any[]) {
 
                         if (!el) return;
 
-                        const eventName = attrName.slice(2).toLowerCase(); // onClick/onclick -> click, onContextMenu -> contextmenu
+                        const eventName = attrName.slice(2).toLowerCase();
                         const handler = expr as (ev: Event) => void;
 
                         el.addEventListener(eventName, handler);
-                        el.removeAttribute(attrName); // on nettoie onclick="..."
+                        el.removeAttribute(attrName);
 
                         return () => {
                             el.removeEventListener(eventName, handler);
                         };
                     });
                 }
+                // In server mode, we append nothing. This makes event attributes behave like other dynamic
+                // attributes, relying on the ordered fallback for hydration instead of a fragile ID match.
 
                 continue;
             }
@@ -692,4 +693,3 @@ export function renderToString<P>(
         partId = prevPartId;
     }
 }
-
