@@ -1,6 +1,6 @@
 ### Documentation complète — nc-signals-components
 [![npm](https://github.com/nicolachoquet06250/nc-signals-components/actions/workflows/npm-package-deploy.yml/badge.svg)](https://github.com/nicolachoquet06250/nc-signals-components/actions/workflows/npm-package-deploy.yml)
-
+[![NPM Package](https://img.shields.io/npm/v/nc-signals-components?logo=npm&logoColor=red&label=npm%20version)](https://www.npmjs.com/package/nc-signals-components)
 
 Dernière mise à jour: 2025-12-05 14:41
 
